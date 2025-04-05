@@ -1,0 +1,13 @@
+{
+	"name": "GeoJSON Import",
+	"webodmMinVersion": "2.0.0",
+	"description": "Import GeoJSON files from plugin",
+	"version": "1.0.0",
+	"author": "Charles Folashade Jr",
+	"email": "folashade96@gmail.com",
+	"repository": "",
+	"tags": ["geojson", "import"],
+	"homepage": "",
+	"experimental": false,
+	"deprecated": false
+}

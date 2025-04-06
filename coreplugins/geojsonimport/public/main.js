@@ -1,4 +1,15 @@
-﻿PluginsAPI.Map.willAddControls([], function (args, _) {
+import React, { Component, Fragment } from "react";
+import PropTypes from 'prop-types';
+
+import ResizeModes from 'webodm/classes/ResizeModes';
+
+import PlatformSelectButton from "./components/PlatformSelectButton";
+import PlatformDialog from "./components/PlatformDialog";
+import LibraryDialog from "./components/LibraryDialog";
+import ErrorDialog from "./components/ErrorDialog";
+import ConfigureNewTaskDialog from "./components/ConfigureNewTaskDialog";
+
+PluginsAPI.Map.willAddControls([], function (args, _) {
 
     setTimeout(function () {
         console.log("Map components loaded. Creating new layer control for utilities");

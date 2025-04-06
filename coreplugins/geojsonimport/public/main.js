@@ -11,10 +11,10 @@ import ConfigureNewTaskDialog from "./components/ConfigureNewTaskDialog";
 
 PluginsAPI.Map.willAddControls([], function (args, _) {
 
-    setTimeout(function () {
+    /* setTimeout(function () {
         console.log("Map components loaded. Creating new layer control for utilities");
 
-        // Create a new layer control
+        // Create a new layer control 
         const layerControl = L.control.layers(null, null, { collapsed: true });
         layerControl.addTo(args.map);
 
@@ -131,5 +131,7 @@ PluginsAPI.Map.willAddControls([], function (args, _) {
                 });
         });
 
-    }, 500); // Allow time for the map components to fully load
+    }, 500); // Allow time for the map components to fully load */
+
+    console.log("test");
 });

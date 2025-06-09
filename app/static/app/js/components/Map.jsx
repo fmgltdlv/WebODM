@@ -33,6 +33,8 @@ import { _ } from '../classes/gettext';
 import UnitSelector from './UnitSelector';
 import { unitSystem, toMetric } from '../classes/Units';
 
+const IOU_THRESHOLD = 0.7;
+
 class Map extends React.Component {
   static defaultProps = {
     showBackground: false,
@@ -76,6 +78,8 @@ class Map extends React.Component {
     this.autolayers = null;
     this.taskCount = 1;
     this.addedCameraShots = {};
+    this.zIndexGroupMap = {};
+    this.ious = {};
 
     this.loadImageryLayers = this.loadImageryLayers.bind(this);
     this.updatePopupFor = this.updatePopupFor.bind(this);
@@ -136,8 +140,8 @@ class Map extends React.Component {
     return "";
   }
 
-  typeZIndex = (type) => {
-    return ["dsm", "dtm", "orthophoto", "plant"].indexOf(type) + 1;
+  typeZIndex = (type, zIndexGroup = 1) => {
+    return ["dsm", "dtm", "orthophoto", "plant"].indexOf(type) + 1 + zIndexGroup * 10;
   }
 
   hasBands = (bands, orthophoto_bands) => {
@@ -148,6 +152,28 @@ class Map extends React.Component {
     }
     
     return true;
+  }
+
+  computeIOU = (b1, b2) => {
+    const [x1Min, y1Min, x1Max, y1Max] = b1;
+    const [x2Min, y2Min, x2Max, y2Max] = b2;
+  
+    const interXMin = Math.max(x1Min, x2Min);
+    const interYMin = Math.max(y1Min, y2Min);
+    const interXMax = Math.min(x1Max, x2Max);
+    const interYMax = Math.min(y1Max, y2Max);
+  
+    const interWidth = Math.max(0, interXMax - interXMin);
+    const interHeight = Math.max(0, interYMax - interYMin);
+    const interArea = interWidth * interHeight;
+  
+    const area1 = (x1Max - x1Min) * (y1Max - y1Min);
+    const area2 = (x2Max - x2Min) * (y2Max - y2Min);
+    const unionArea = area1 + area2 - interArea;
+  
+    if (unionArea === 0) return 0;
+  
+    return interArea / unionArea;
   }
 
   loadImageryLayers(forceAddLayers = false){
@@ -179,8 +205,42 @@ class Map extends React.Component {
     return new Promise((resolve, reject) => {
       this.tileJsonRequests = [];
 
+      // Set a zIndexGroup
+      this.zIndexGroupMap = {};
+      let zIdx = 1;
+      for (let i = tiles.length - 1; i >= 0; i--){
+        if (!tiles[i].zIndexGroup){
+          const taskId = tiles[i].meta.task.id;
+          if (!this.zIndexGroupMap[taskId]) this.zIndexGroupMap[taskId] = zIdx++;
+          tiles[i].zIndexGroup = this.zIndexGroupMap[taskId];
+        }
+      }
+
+      // Compute IoU scores
+      // This gives us an idea of overlap between tasks
+      // so that we can decide to show them in project map view
+      this.ious = {};
+      for (let i = tiles.length - 1; i >= 0; i--){
+        const taskId = tiles[i].meta.task.id;
+        if (this.ious[taskId] === undefined){
+          for (let j = i - 1; j >= 0; j--){
+            const tId = tiles[j].meta.task.id;
+            if (tId === taskId) continue;
+            if (!tiles[i].meta.task.extent || !tiles[j].meta.task.extent) continue;
+            
+            const iou = this.computeIOU(tiles[i].meta.task.extent, tiles[j].meta.task.extent);
+            if (this.ious[taskId] === undefined){
+              this.ious[taskId] = iou;
+            }else{
+              this.ious[taskId] = Math.max(this.ious[taskId], iou);
+            }
+          }
+        }
+      }
+      this.ious[tiles[0].meta.task.id] = 0; // First task is always visible
+
       async.each(tiles, (tile, done) => {
-        const { url, type } = tile;
+        const { url, type, zIndexGroup } = tile;
         const meta = Utils.clone(tile.meta);
 
         let metaUrl = url + "metadata";
@@ -277,7 +337,7 @@ class Map extends React.Component {
                 if (meta.task.crop) params.crop = 1;
                 tileUrl = Utils.buildUrlWithQuery(tileUrl, params);
             }
-            
+
             const layer = Leaflet.tileLayer(tileUrl, {
                   bounds,
                   minZoom: 0,
@@ -287,7 +347,7 @@ class Map extends React.Component {
                   tms: scheme === 'tms',
                   opacity: this.state.opacity / 100,
                   detectRetina: true,
-                  zIndex: this.typeZIndex(type),
+                  zIndex: this.typeZIndex(type, zIndexGroup),
                 });
             
             // Associate metadata with this layer
@@ -299,6 +359,7 @@ class Map extends React.Component {
             meta.icon = this.typeToIcon(type, this.props.thermal || thermal);
             meta.type = type;
             meta.raster = true;
+            meta.zIndexGroup = zIndexGroup;
             meta.autoExpand = this.taskCount === 1 && type === this.props.mapType;
             meta.metaUrl = metaUrl;
             meta.unitForward = unitForward;
@@ -310,8 +371,9 @@ class Map extends React.Component {
             layer[Symbol.for("meta")] = meta;
             layer[Symbol.for("tile-meta")] = mres;
 
+            const iou = this.ious[meta.task.id] || 0;
             if (forceAddLayers || prevSelectedLayers.indexOf(layerId(layer)) !== -1){
-              if (type === this.props.mapType){
+              if (type === this.props.mapType && iou <= IOU_THRESHOLD){
                 layer.addTo(this.map);
               }
             }
@@ -430,7 +492,11 @@ class Map extends React.Component {
                       shotsLayer.addMarkers(markers, this.map);
                     }
                   });
-                shotsLayer[Symbol.for("meta")] = {name: _("Cameras"), icon: "fa fa-camera fa-fw"};
+                shotsLayer[Symbol.for("meta")] = {
+                  name: _("Cameras"), 
+                  icon: "fa fa-camera fa-fw",
+                  zIndexGroup
+                };
                 if (this.taskCount > 1){
                   // Assign to a group
                   shotsLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
@@ -484,7 +550,12 @@ class Map extends React.Component {
                       gcpLayer.addMarkers(markers, this.map);
                     }
                   });
-                gcpLayer[Symbol.for("meta")] = {name: _("Ground Control Points"), icon: "far fa-dot-circle fa-fw"};
+                gcpLayer[Symbol.for("meta")] = {
+                  name: _("Ground Control Points"), 
+                  icon: "far fa-dot-circle fa-fw",
+                  zIndexGroup
+                };
+                
                 if (this.taskCount > 1){
                   // Assign to a group
                   gcpLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
@@ -843,13 +914,24 @@ _('Example:'),
     });
   }
 
-  handleAddAnnotation = (layer, name, task) => {
+  handleAddAnnotation = (layer, name, task, stored) => {
+      const zIndexGroup = this.zIndexGroupMap[task.id] || 1;
+      
       const meta = {
         name: name || "", 
-        icon: "fa fa-sticky-note fa-fw"
+        icon: "fa fa-sticky-note fa-fw",
+        zIndexGroup
       };
+
       if (this.taskCount > 1 && task){
         meta.group = {id: task.id, name: task.name};
+        
+        if (stored){
+          // Only show annotations for top-most tasks
+          if (this.ious[task.id] >= 0.01){
+            PluginsAPI.Map.toggleAnnotation(layer, false);
+          }
+        }
       }
       layer[Symbol.for("meta")] = meta;
 

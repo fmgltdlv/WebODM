@@ -374,6 +374,16 @@ class Task(models.Model):
         self.validate_unique()
 
         super(Task, self).save(*args, **kwargs)
+    
+    def get_extent(self):
+        if self.orthophoto_extent is not None:
+            return self.orthophoto_extent.extent
+        elif self.dsm_extent is not None:
+            return self.dsm_extent.extent
+        elif self.dtm_extent is not None:
+            return self.dsm_extent.extent
+        else:
+            return None
 
     def assets_path(self, *args):
         """
@@ -470,9 +480,6 @@ class Task(models.Model):
                     try:
                         # Try to use hard links first
                         shutil.copytree(self.task_path(), task.task_path(), copy_function=os.link)
-
-                        # Make sure the console output is not linked to the original task
-                        task.console.delink()
                     except Exception as e:
                         logger.warning("Cannot duplicate task using hard links, will use normal copy instead: {}".format(str(e)))
                         shutil.copytree(self.task_path(), task.task_path())
@@ -980,7 +987,7 @@ class Task(models.Model):
             # Check if the zip file contained a top level directory
             # which shouldn't be there and try to fix the structure
             top_level = [os.path.join(assets_dir, d) for d in os.listdir(assets_dir)]
-            if len(top_level) == 1 and os.path.isdir(top_level[0]):
+            if len(top_level) == 1 and os.path.isdir(top_level[0]) and (not top_level[0].endswith("odm_orthophoto")):
                 second_level = [os.path.join(top_level[0], f) for f in os.listdir(top_level[0])]
                 if len(second_level) > 0:
                     logger.info("Top level directory found in imported archive, attempting to fix")
@@ -1038,6 +1045,11 @@ class Task(models.Model):
             self.import_url = ""
         else:
             self.console += gettext("Done!") + "\n"
+
+        task_output = self.assets_path("task_output.txt")
+        if os.path.isfile(task_output):
+            # Guarantee consistency, save space
+            self.console.link(task_output)
         
         self.save()
 
@@ -1097,7 +1109,8 @@ class Task(models.Model):
                     'ground_control_points': ground_control_points,
                     'epsg': self.epsg,
                     'orthophoto_bands': self.orthophoto_bands,
-                    'crop': self.crop is not None
+                    'crop': self.crop is not None,
+                    'extent': self.get_extent(),
                 }
             }
         }

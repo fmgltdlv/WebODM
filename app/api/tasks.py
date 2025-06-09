@@ -89,14 +89,7 @@ class TaskSerializer(serializers.ModelSerializer):
         return []
 
     def get_extent(self, obj):
-        if obj.orthophoto_extent is not None:
-            return obj.orthophoto_extent.extent
-        elif obj.dsm_extent is not None:
-            return obj.dsm_extent.extent
-        elif obj.dtm_extent is not None:
-            return obj.dsm_extent.extent
-        else:
-            return None
+        return obj.get_extent()
 
     class Meta:
         model = models.Task
@@ -165,8 +158,14 @@ class TaskViewSet(viewsets.ViewSet):
     def output(self, request, pk=None, project_pk=None):
         """
         Retrieve the console output for this task.
+
         An optional "line" query param can be passed to retrieve
         only the output starting from a certain line number.
+
+        An optional "limit" query param can be passed to limit
+        the number of lines to be returned
+
+        An optional "f" query param can be either: "text" (default), "json" or "raw"
         """
         get_and_check_project(request, project_pk)
         try:
@@ -174,8 +173,36 @@ class TaskViewSet(viewsets.ViewSet):
         except (ObjectDoesNotExist, ValidationError):
             raise exceptions.NotFound()
 
-        line_num = max(0, int(request.query_params.get('line', 0)))
-        return Response('\n'.join(task.console.output().rstrip().split('\n')[line_num:]))
+        try:
+            line_num = max(0, int(request.query_params.get('line', 0)))
+            limit = int(request.query_params.get('limit', 0)) or None
+            fmt = request.query_params.get('f', 'text')
+            if fmt not in ['text', 'json', 'raw']:
+                raise ValueError("Invalid format")
+        except ValueError:
+            raise exceptions.ValidationError("Invalid parameter")
+
+        lines = task.console.output().rstrip().split('\n')
+        count = len(lines)
+        line_start = min(line_num, count)
+        line_end = None
+
+        if limit is not None:
+            if limit > 0:
+                line_end = line_num + limit
+            else:
+                line_start = line_start if count - line_start <= abs(limit) else count - abs(limit) 
+                line_end = None 
+
+        if fmt == 'text':
+            return Response('\n'.join(lines[line_start:line_end]))
+        elif fmt == 'raw':
+            return HttpResponse('\n'.join(lines[line_start:line_end]), content_type="text/plain; charset=utf-8")
+        else:
+            return Response({
+                'lines': lines[line_start:line_end],
+                'count': count
+            })
 
     def list(self, request, project_pk=None):
         get_and_check_project(request, project_pk)
@@ -505,13 +532,12 @@ class TaskThumbnail(TaskNestedView):
                     out_width = int(thumb_size * ratio)
 
 
-                with WarpedVRT(raster, cutline=cutline) as vrt:
+                with WarpedVRT(raster, cutline=cutline, nodata=0) as vrt:
                     rgb = vrt.read(indexes=indexes, window=win, fill_value=0, out_shape=(
                         len(indexes),
                         out_height,
                         out_width,
                     ), resampling=rasterio.enums.Resampling.nearest)
-                
                 img = np.zeros((len(indexes), thumb_size, thumb_size), dtype=rgb.dtype)
                 y_offset = (thumb_size - out_height) // 2
                 x_offset = (thumb_size - out_width) // 2
@@ -531,12 +557,12 @@ class TaskThumbnail(TaskNestedView):
                     thumb_size,
                     thumb_size,
                 ), resampling=rasterio.enums.Resampling.nearest)
-            
+
             img = img.transpose((1, 2, 0))
 
         if img.dtype != np.uint8:
             img = img.astype(np.float32)
-            
+
             # Ignore alpha values
             minval = img[:,:,:3].min()
             maxval = img[:,:,:3].max()
@@ -544,6 +570,10 @@ class TaskThumbnail(TaskNestedView):
             if minval != maxval:
                 img[:,:,:3] -= minval
                 img[:,:,:3] *= (255.0/(maxval-minval))
+
+            # Normalize alpha
+            if img.shape[2] == 4:
+                img[:,:,3] = np.where(img[:,:,3]==0, 0, 255)
             
             img = img.astype(np.uint8)
 

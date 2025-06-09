@@ -211,6 +211,13 @@ class Metadata(TaskNestedView):
                 info = json.loads(metadata.json())
         except IndexError as e:
             # Caught when trying to get an invalid raster metadata
+            # or when the crop area is defined improperly. In order
+            # to avoid locking the user out of the map, we remove cropping
+            # if this ever happens.
+            if task.crop is not None:
+                task.crop = None
+                task.save()
+            
             raise exceptions.ValidationError("Cannot retrieve raster metadata: %s" % str(e))
         # Override min/max
         if hrange:
@@ -428,7 +435,7 @@ class Tiles(TaskNestedView):
                                     tile_buffer=tile_buffer,
                                     resampling_method=resampling, vrt_options=vrt_options)
                 else:
-                    tile = src.tile(x, y, z, tilesize=tilesize, nodata=nodata,
+                    tile = src.tile(x, y, z, indexes=indexes, tilesize=tilesize, nodata=nodata,
                                     padding=padding,
                                     tile_buffer=tile_buffer,
                                     resampling_method=resampling, vrt_options=vrt_options)

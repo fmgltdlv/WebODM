@@ -1,6 +1,7 @@
 from django.conf.urls import url, include
 
 from app.api.presets import PresetViewSet
+from app.api.projects import serve_project_vector_file
 from app.plugins.views import api_view_handler
 from .projects import ProjectViewSet
 from .tasks import TaskViewSet, TaskDownloads, TaskThumbnail, TaskAssets, TaskBackup, TaskAssetsImport
@@ -50,6 +51,8 @@ urlpatterns = [
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/backup$', TaskBackup.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/images/thumbnail/(?P<image_filename>.+)$', Thumbnail.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/images/download/(?P<image_filename>.+)$', ImageDownload.as_view()),
+    re_path(r'^project/(?P<pk>\d+)/vectors/(?P<filename>.+)$', serve_project_vector_file, name='project-vector-file'),
+
 
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/3d/scene$', Scene.as_view()),
     url(r'projects/(?P<project_pk>[^/.]+)/tasks/(?P<pk>[^/.]+)/3d/cameraview$', CameraView.as_view()),

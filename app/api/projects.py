@@ -16,9 +16,12 @@ from .tasks import TaskIDsSerializer
 from .tags import TagsField, parse_tags_input
 from .common import get_and_check_project
 from django.utils.translation import gettext as _
+from django.http import FileResponse, Http404
+import os
+import json
 
 def normalized_perm_names(perms):
-    return list(map(lambda p: p.replace("_project", ""),perms))
+    return list(map(lambda p: p.replace("_project", ""), perms))
 
 class ProjectSerializer(serializers.ModelSerializer):
     tasks = TaskIDsSerializer(many=True, read_only=True)
@@ -34,7 +37,6 @@ class ProjectSerializer(serializers.ModelSerializer):
         if 'request' in self.context:
             return normalized_perm_names(get_perms(self.context['request'].user, obj))
         else:
-            # Cannot list permissions, no user is associated with request (happens when serializing ui test mocks)
             return []
     
     def get_owned(self, obj):
@@ -110,7 +112,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
     filterset_class = ProjectFilter
     ordering_fields = '__all__'
 
-    # Disable pagination when not requesting any page
     def paginate_queryset(self, queryset):
         if self.paginator and self.request.query_params.get(self.paginator.page_query_param, None) is None:
             return None
@@ -118,9 +119,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def duplicate(self, request, pk=None):
-        """
-        Duplicate a task
-        """
         project = get_and_check_project(request, pk, ('change_project', ))
 
         new_project = project.duplicate(new_owner=request.user)
@@ -157,7 +155,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
                 form_perms = request.data.get('permissions')
                 if form_perms is not None:
-                    # Build perms map (ignore owners, empty usernames)
                     perms_map = {}
                     for perm in form_perms:
                         if not perm.get('owner') and perm.get('username'):
@@ -165,10 +162,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
                     db_perms = get_users_with_perms(project, attach_perms=True, with_group_users=False)
                     
-                    # Check users to remove
                     for user in db_perms:
-
-                        # Never modify owner permissions
                         if project.owner == user:
                             continue
                         
@@ -176,21 +170,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
                             for p in db_perms[user]:
                                 remove_perm(p, user, project)
                     
-                    # Check users to add/edit
                     for username in perms_map:
                         for p in ["add", "change", "delete", "view"]:
                             perm = p + "_project"
                             user = User.objects.get(username=username)
 
-                            # Skip owners
                             if project.owner == user:
                                 continue
 
-                            # Has permission in database but not in form?
                             if user.has_perm(perm, project) and not p in perms_map[username]:
                                 remove_perm(perm, user, project)
                             
-                            # Has permission in form but not in database?
                             elif p in perms_map[username] and not user.has_perm(perm, project):
                                 assign_perm(perm, user, project)
 
@@ -204,16 +194,52 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def destroy(self, request, pk=None):
         project = get_and_check_project(request, pk, ('view_project', ))
 
-        # Owner? Delete the project
         if project.owner == request.user or request.user.is_superuser:
             get_and_check_project(request, pk, ('delete_project', ))
 
             return super().destroy(self, request, pk=pk)
         else:
-            # Do not remove the project, simply remove all user's permissions to the project
-            # to avoid shared projects from being accidentally deleted
             for p in ["add", "change", "delete", "view"]:
                 perm = p + "_project"
                 remove_perm(perm, request.user, project)
             return Response(status=status.HTTP_204_NO_CONTENT)
-        
+
+    @action(detail=True, methods=['get'])
+    def vectors(self, request, pk=None):
+        project = self.get_object()
+        vectors_path = os.path.join(project.path, 'odm_report', 'vectors')
+
+        manifest = {}
+        manifest_path = os.path.join(vectors_path, 'manifest.json')
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+            except Exception as e:
+                print(f"Error reading manifest.json: {e}")
+
+        if not os.path.exists(vectors_path):
+            return Response([])
+
+        layer_files = []
+        for filename in os.listdir(vectors_path):
+            if filename.lower().endswith('.geojson'):
+                color = manifest.get(filename, {}).get('color')
+                layer_files.append({
+                    'name': filename,
+                    'url': f'/project/{pk}/vectors/{filename}',
+                    'color': color
+                })
+
+        return Response(layer_files)
+
+
+def serve_project_vector_file(request, pk, filename):
+    project = models.Project.objects.get(pk=pk)
+    vectors_path = os.path.join(project.path, 'odm_report', 'vectors')
+    file_path = os.path.join(vectors_path, filename)
+
+    if not os.path.exists(file_path):
+        raise Http404("Vector file not found")
+
+    return FileResponse(open(file_path, 'rb'), content_type='application/json')
